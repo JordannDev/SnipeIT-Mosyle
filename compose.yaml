@@ -1,0 +1,7 @@
+﻿services:
+  snipemosyle:
+    image: snipemosyle
+    build:
+      context: .
+      dockerfile: SnipeMosyle/Dockerfile
+
