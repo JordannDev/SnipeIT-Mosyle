@@ -37,4 +37,10 @@ public sealed class SnipeItOptions
 
     /// <summary>The end-of-life value sent when creating missing models.</summary>
     public int DefaultModelEol { get; set; }
+
+    /// <summary>Delay between successful paged Snipe-IT requests.</summary>
+    public int PageDelayMilliseconds { get; set; } = Clients.ApiRetryPolicy.DefaultPageDelayMilliseconds;
+
+    /// <summary>Maximum number of retries after Snipe-IT returns HTTP 429.</summary>
+    public int RateLimitMaxRetries { get; set; } = Clients.ApiRetryPolicy.DefaultMaxRateLimitRetries;
 }

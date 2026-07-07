@@ -134,6 +134,49 @@ public sealed class DeviceSyncServiceTests
         Assert.Equal(1000, asset.ModelId);
     }
 
+    [Fact]
+    public async Task RunAsync_PullsMosylePagesUntilReportedTotal()
+    {
+        var mosyle = new FakeMosyleClient();
+        mosyle.SetDevicePage(1, [Device(serial: "ABC001")], rows: 3, pageSize: 1);
+        mosyle.SetDevicePage(2, [Device(serial: "ABC002")], rows: 3, pageSize: 1);
+        mosyle.SetDevicePage(3, [Device(serial: "ABC003")], rows: 3, pageSize: 1);
+
+        var snipe = new FakeSnipeItClient
+        {
+            Lookup = serial => new AssetListResponse
+            {
+                Rows = [Asset(id: int.Parse(serial[^1..]))]
+            }
+        };
+
+        await CreateService(mosyle, snipe).RunAsync();
+
+        Assert.Equal([1, 2, 3], mosyle.DevicePagesRequested);
+        Assert.Equal(3, snipe.LookedUpSerials.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_StopsMosylePaginationOnEmptyPageWhenMetadataIsMissing()
+    {
+        var mosyle = new FakeMosyleClient();
+        mosyle.SetDevicePage(1, [Device(serial: "ABC001")], rows: 0, pageSize: 1);
+        mosyle.SetDevicePage(2, [], rows: 0, pageSize: 1);
+
+        var snipe = new FakeSnipeItClient
+        {
+            Lookup = _ => new AssetListResponse
+            {
+                Rows = [Asset()]
+            }
+        };
+
+        await CreateService(mosyle, snipe).RunAsync();
+
+        Assert.Equal([1, 2], mosyle.DevicePagesRequested);
+        Assert.Single(snipe.LookedUpSerials);
+    }
+
     private static DeviceSyncService CreateService(FakeMosyleClient mosyle, FakeSnipeItClient snipe)
     {
         return new DeviceSyncService(
@@ -143,9 +186,13 @@ public sealed class DeviceSyncServiceTests
             {
                 AccessToken = "access-token",
                 Email = "user@example.com",
-                Password = "password"
+                Password = "password",
+                PageDelayMilliseconds = 0
             }),
-            OptionsFactory.Create(new SnipeItOptions()),
+            OptionsFactory.Create(new SnipeItOptions
+            {
+                PageDelayMilliseconds = 0
+            }),
             NullLogger<DeviceSyncService>.Instance);
     }
 
@@ -191,14 +238,27 @@ public sealed class DeviceSyncServiceTests
 
     private sealed class FakeMosyleClient : IMosyleClient
     {
-        private readonly List<Device> _devices;
+        private readonly Dictionary<int, DeviceResponse> _devicePages = [];
 
         public FakeMosyleClient(params Device[] devices)
         {
-            _devices = devices.ToList();
+            if (devices.Length > 0)
+                SetDevicePage(1, devices, devices.Length, Math.Max(1, devices.Length));
         }
 
         public List<(string SerialNumber, IReadOnlyCollection<string>? AssetTags)> UpdatedDevices { get; } = [];
+        public List<int> DevicePagesRequested { get; } = [];
+
+        public void SetDevicePage(int page, IReadOnlyCollection<Device> devices, int rows, int pageSize)
+        {
+            _devicePages[page] = new DeviceResponse
+            {
+                Devices = devices.ToList(),
+                Rows = rows,
+                PageSize = pageSize,
+                Page = page
+            };
+        }
 
         public Task<LoginResponse?> LoginAsync(
             string email,
@@ -214,10 +274,11 @@ public sealed class DeviceSyncServiceTests
             int page = 1,
             CancellationToken cancellationToken = default)
         {
-            var devices = page == 1 ? _devices : [];
+            DevicePagesRequested.Add(page);
+            _devicePages.TryGetValue(page, out var devicePage);
             return Task.FromResult<DeviceListResponse?>(new DeviceListResponse
             {
-                Response = [new DeviceResponse { Devices = devices }]
+                Response = [devicePage ?? new DeviceResponse { Page = page }]
             });
         }
 
@@ -240,16 +301,26 @@ public sealed class DeviceSyncServiceTests
         public List<CreateAssetRequest> CreatedAssets { get; } = [];
         public List<string> CreatedModels { get; } = [];
         public List<(int AssetId, UpdateAssetRequest Request)> UpdatedAssets { get; } = [];
+        public List<string> LookedUpSerials { get; } = [];
 
         public Task<AssetListResponse?> GetAssetBySerialAsync(
             string serial,
             bool includeDeleted = false,
             CancellationToken cancellationToken = default)
         {
+            LookedUpSerials.Add(serial);
             return Task.FromResult(Lookup(serial));
         }
 
         public Task<AssetListResponse?> GetAssetsAsync(int page = 1, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<AssetListResponse?>(new AssetListResponse());
+        }
+
+        public Task<AssetListResponse?> GetAllAssetsAsync(
+            int limit = 200,
+            int offset = 0,
+            CancellationToken cancellationToken = default)
         {
             return Task.FromResult<AssetListResponse?>(new AssetListResponse());
         }

@@ -2,6 +2,7 @@
 
 using jordanm.cloud.mosyle.Clients.Mosyle;
 using jordanm.cloud.mosyle.Clients.SnipeIt;
+using jordanm.cloud.mosyle.Clients;
 using jordanm.cloud.mosyle.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -65,25 +66,66 @@ public sealed class DeviceSyncService : IDeviceSyncService
 
     private async Task<List<Device>> PullMosyleDevicesAsync(CancellationToken cancellationToken)
     {
-        // Preserve the legacy two-page fetch for this cleanup pass. General pagination
-        // belongs in a later behavior-focused improvement.
-        var devices = await GetDevicesPageAsync(1, cancellationToken);
-        devices.AddRange(await GetDevicesPageAsync(2, cancellationToken));
+        var devices = new List<Device>();
+        int? totalRows = null;
+        var page = 1;
+
+        while (true)
+        {
+            var pageResponse = await GetDevicesPageAsync(page, cancellationToken);
+            var pageDevices = pageResponse?.Devices ?? [];
+            var responsePage = pageResponse?.Page > 0 ? pageResponse.Page : page;
+            var pageSize = pageResponse?.PageSize > 0 ? pageResponse.PageSize : pageDevices.Count;
+
+            if (pageResponse?.Rows > 0)
+                totalRows = pageResponse.Rows;
+
+            if (pageDevices.Count == 0)
+            {
+                _logger.LogInformation("Mosyle page {page} returned no devices; stopping pagination.", responsePage);
+                break;
+            }
+
+            devices.AddRange(pageDevices);
+            _logger.LogInformation(
+                "Pulled Mosyle page {page} with {pageCount} devices. Collected={collected}, Total={total}.",
+                responsePage,
+                pageDevices.Count,
+                devices.Count,
+                totalRows);
+
+            if (!ShouldFetchNextMosylePage(totalRows, devices.Count, pageDevices.Count, pageSize))
+                break;
+
+            page++;
+            await ApiRetryPolicy.DelayBetweenPagesAsync(_mosyleOptions.PageDelayMilliseconds, cancellationToken);
+        }
 
         _logger.LogInformation("Pulled {count} devices from Mosyle", devices.Count);
         return devices;
     }
 
-    private async Task<List<Device>> GetDevicesPageAsync(int page, CancellationToken cancellationToken)
+    private async Task<DeviceResponse?> GetDevicesPageAsync(int page, CancellationToken cancellationToken)
     {
         var response = await _mosyleClient.GetDevicesAsync(page: page, cancellationToken: cancellationToken);
-        return response?.Response.FirstOrDefault()?.Devices ?? [];
+        return response?.Response.FirstOrDefault();
     }
 
     private async Task RefreshSnipeModelsAsync(CancellationToken cancellationToken)
     {
         var snipeModels = await _snipeClient.GetAllModelsAsync(cancellationToken: cancellationToken);
         _models = snipeModels?.Rows ?? [];
+    }
+
+    private static bool ShouldFetchNextMosylePage(int? totalRows, int collectedRows, int pageRows, int pageSize)
+    {
+        if (pageRows == 0)
+            return false;
+
+        if (totalRows.HasValue && totalRows.Value > 0)
+            return collectedRows < totalRows.Value;
+
+        return pageSize > 0 && pageRows >= pageSize;
     }
 
     private async Task<DeviceSyncOutcome> SyncDeviceAsync(Device device, CancellationToken cancellationToken)

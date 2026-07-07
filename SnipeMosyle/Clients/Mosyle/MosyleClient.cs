@@ -3,6 +3,7 @@
 using Newtonsoft.Json;
 using RestSharp;
 using RestSharp.Serializers.NewtonsoftJson;
+using jordanm.cloud.mosyle.Clients;
 
 namespace jordanm.cloud.mosyle.Clients.Mosyle;
 
@@ -12,9 +13,15 @@ namespace jordanm.cloud.mosyle.Clients.Mosyle;
 public sealed class MosyleClient : IMosyleClient
 {
     private readonly RestClient _client;
+    private readonly int _pageDelayMilliseconds;
+    private readonly int _maxRateLimitRetries;
     private string? _sessionToken;
 
-    public MosyleClient(string accessToken, string baseUrl)
+    public MosyleClient(
+        string accessToken,
+        string baseUrl,
+        int pageDelayMilliseconds = ApiRetryPolicy.DefaultPageDelayMilliseconds,
+        int maxRateLimitRetries = ApiRetryPolicy.DefaultMaxRateLimitRetries)
     {
         var options = new RestClientOptions(baseUrl)
         {
@@ -24,6 +31,8 @@ public sealed class MosyleClient : IMosyleClient
 
         _client = new RestClient(options, configureSerialization: serializer => serializer.UseNewtonsoftJson());
         _client.AddDefaultHeader("accessToken", accessToken);
+        _pageDelayMilliseconds = pageDelayMilliseconds;
+        _maxRateLimitRetries = Math.Max(0, maxRateLimitRetries);
     }
 
     public async Task<LoginResponse?> LoginAsync(
@@ -34,7 +43,7 @@ public sealed class MosyleClient : IMosyleClient
         var request = new RestRequest("login", Method.Post);
         request.AddJsonBody(new { email, password });
 
-        var response = await _client.ExecuteAsync<LoginResponse>(request, cancellationToken);
+        var response = await ExecuteWithRateLimitRetryAsync<LoginResponse>(request, cancellationToken);
 
         if (!response.IsSuccessful)
             throw new InvalidOperationException($"Login failed: {response.StatusCode} - {response.Content}");
@@ -86,7 +95,7 @@ public sealed class MosyleClient : IMosyleClient
             }
         });
 
-        var response = await _client.ExecuteAsync<DeviceListResponse>(request, cancellationToken);
+        var response = await ExecuteWithRateLimitRetryAsync<DeviceListResponse>(request, cancellationToken);
 
         if (!response.IsSuccessful)
             throw new InvalidOperationException($"Device list failed: {response.StatusCode} - {response.Content}");
@@ -109,7 +118,7 @@ public sealed class MosyleClient : IMosyleClient
             asset_tag = assetTags
         });
 
-        var response = await _client.ExecuteAsync<DeviceUpdateResponse>(request, cancellationToken);
+        var response = await ExecuteWithRateLimitRetryAsync<DeviceUpdateResponse>(request, cancellationToken);
 
         if (!response.IsSuccessful)
             throw new InvalidOperationException($"Device update failed: {response.StatusCode} - {response.Content}");
@@ -121,5 +130,20 @@ public sealed class MosyleClient : IMosyleClient
     {
         if (string.IsNullOrWhiteSpace(_sessionToken))
             throw new InvalidOperationException("You must login first.");
+    }
+
+    private async Task<RestResponse<T>> ExecuteWithRateLimitRetryAsync<T>(
+        RestRequest request,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var response = await _client.ExecuteAsync<T>(request, cancellationToken);
+            if ((int)response.StatusCode != 429 || attempt >= _maxRateLimitRetries)
+                return response;
+
+            var delay = ApiRetryPolicy.GetRetryDelay(response.Headers, _pageDelayMilliseconds, attempt + 1);
+            await Task.Delay(delay, cancellationToken);
+        }
     }
 }

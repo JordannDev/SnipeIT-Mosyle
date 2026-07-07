@@ -11,11 +11,12 @@ The tests in this repository were written by Codex. I will not guarantee any deg
 The app currently performs one sync pass:
 
 - logs in to Mosyle.
-- pulls the configured Mosyle device pages.
+- pulls all Mosyle device pages.
 - looks up each device in Snipe-IT by serial number.
 - creates missing Snipe-IT assets.
 - updates tracked Snipe-IT fields when Mosyle has newer values.
-- creates missing Snipe-IT models before creating or updating assets.
+- walks all Snipe-IT model pages before creating or updating assets.
+- waits briefly between paged requests and retries rate-limited API calls.
 
 ## Project Layout
 
@@ -35,7 +36,9 @@ Create `SnipeMosyle/appsettings.json` from `SnipeMosyle/appsettings.example.json
     "BaseUrl": "https://businessapi.mosyle.com/v1",
     "AccessToken": "your-mosyle-access-token",
     "Email": "your-mosyle-login@example.com",
-    "Password": "your-mosyle-password"
+    "Password": "your-mosyle-password",
+    "PageDelayMilliseconds": 250,
+    "RateLimitMaxRetries": 3
   },
   "SnipeIt": {
     "BaseUrl": "https://your-snipeit-instance.example.com",
@@ -45,7 +48,9 @@ Create `SnipeMosyle/appsettings.json` from `SnipeMosyle/appsettings.example.json
     "DefaultManufacturerId": 1,
     "DefaultCategoryId": 6,
     "DefaultFieldsetId": 5,
-    "DefaultModelEol": 0
+    "DefaultModelEol": 0,
+    "PageDelayMilliseconds": 250,
+    "RateLimitMaxRetries": 3
   }
 }
 ```
@@ -60,6 +65,8 @@ The numeric Snipe-IT IDs preserve the current sync behavior:
 - `DefaultCategoryId`: category used when creating missing models.
 - `DefaultFieldsetId`: fieldset used when creating missing models.
 - `DefaultModelEol`: EOL value sent when creating missing models.
+- `PageDelayMilliseconds`: delay between successful paged requests. Defaults to `250`.
+- `RateLimitMaxRetries`: retries attempted after HTTP 429 responses. Defaults to `3`; `Retry-After` is honored when present.
 
 ## Running
 

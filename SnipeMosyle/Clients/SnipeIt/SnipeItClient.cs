@@ -2,6 +2,8 @@
 
 using Newtonsoft.Json;
 using RestSharp;
+using RestSharp.Serializers.NewtonsoftJson;
+using jordanm.cloud.mosyle.Clients;
 
 namespace jordanm.cloud.mosyle.Clients.SnipeIt;
 
@@ -11,8 +13,14 @@ namespace jordanm.cloud.mosyle.Clients.SnipeIt;
 public sealed class SnipeItClient : ISnipeItClient
 {
     private readonly RestClient _client;
+    private readonly int _pageDelayMilliseconds;
+    private readonly int _maxRateLimitRetries;
 
-    public SnipeItClient(string baseUrl, string apiToken)
+    public SnipeItClient(
+        string baseUrl,
+        string apiToken,
+        int pageDelayMilliseconds = ApiRetryPolicy.DefaultPageDelayMilliseconds,
+        int maxRateLimitRetries = ApiRetryPolicy.DefaultMaxRateLimitRetries)
     {
         var options = new RestClientOptions(baseUrl.TrimEnd('/') + "/api/v1/")
         {
@@ -20,9 +28,11 @@ public sealed class SnipeItClient : ISnipeItClient
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        _client = new RestClient(options);
+        _client = new RestClient(options, configureSerialization: serializer => serializer.UseNewtonsoftJson());
         _client.AddDefaultHeader("Accept", "application/json");
         _client.AddDefaultHeader("Authorization", $"Bearer {apiToken}");
+        _pageDelayMilliseconds = pageDelayMilliseconds;
+        _maxRateLimitRetries = Math.Max(0, maxRateLimitRetries);
     }
 
     public Task<AssetListResponse?> GetAssetBySerialAsync(
@@ -39,20 +49,75 @@ public sealed class SnipeItClient : ISnipeItClient
         return SendRequestAsync<AssetListResponse>($"hardware?page={page}", Method.Get, cancellationToken: cancellationToken);
     }
 
+    public async Task<AssetListResponse?> GetAllAssetsAsync(
+        int limit = 200,
+        int offset = 0,
+        CancellationToken cancellationToken = default)
+    {
+        var pageLimit = Math.Max(1, limit);
+        var currentOffset = Math.Max(0, offset);
+        var allAssets = new AssetListResponse
+        {
+            Offset = currentOffset,
+            Limit = pageLimit
+        };
+
+        while (true)
+        {
+            var page = await SendRequestAsync<AssetListResponse>(
+                $"hardware?limit={pageLimit}&offset={currentOffset}",
+                Method.Get,
+                cancellationToken: cancellationToken);
+
+            var rows = page?.Rows ?? [];
+            allAssets.Status = page?.Status ?? allAssets.Status;
+            allAssets.Total = page?.Total ?? allAssets.Total;
+            allAssets.Rows.AddRange(rows);
+
+            if (!ShouldFetchNextPage(allAssets.Total, allAssets.Rows.Count, rows.Count, pageLimit))
+                return allAssets;
+
+            currentOffset += pageLimit;
+            await ApiRetryPolicy.DelayBetweenPagesAsync(_pageDelayMilliseconds, cancellationToken);
+        }
+    }
+
     public Task<UserResponse?> GetUserAsync(int userId, CancellationToken cancellationToken = default)
     {
         return SendRequestAsync<UserResponse>($"users/{userId}", Method.Get, cancellationToken: cancellationToken);
     }
 
-    public Task<ModelListResponse?> GetAllModelsAsync(
+    public async Task<ModelListResponse?> GetAllModelsAsync(
         int limit = 200,
         int offset = 0,
         string sort = "created_at",
         string order = "asc",
         CancellationToken cancellationToken = default)
     {
-        var endpoint = $"models?limit={limit}&offset={offset}&sort={sort}&order={order}";
-        return SendRequestAsync<ModelListResponse>(endpoint, Method.Get, cancellationToken: cancellationToken);
+        var pageLimit = Math.Max(1, limit);
+        var currentOffset = Math.Max(0, offset);
+        var allModels = new ModelListResponse
+        {
+            Offset = currentOffset,
+            Limit = pageLimit
+        };
+
+        while (true)
+        {
+            var endpoint = $"models?limit={pageLimit}&offset={currentOffset}&sort={sort}&order={order}";
+            var page = await SendRequestAsync<ModelListResponse>(endpoint, Method.Get, cancellationToken: cancellationToken);
+
+            var rows = page?.Rows ?? [];
+            allModels.Status = page?.Status ?? allModels.Status;
+            allModels.Total = page?.Total ?? allModels.Total;
+            allModels.Rows.AddRange(rows);
+
+            if (!ShouldFetchNextPage(allModels.Total, allModels.Rows.Count, rows.Count, pageLimit))
+                return allModels;
+
+            currentOffset += pageLimit;
+            await ApiRetryPolicy.DelayBetweenPagesAsync(_pageDelayMilliseconds, cancellationToken);
+        }
     }
 
     public Task<CreateModelResponse?> CreateModelAsync(
@@ -103,7 +168,7 @@ public sealed class SnipeItClient : ISnipeItClient
         if (body != null)
             request.AddJsonBody(body);
 
-        var response = await _client.ExecuteAsync(request, cancellationToken);
+        var response = await ExecuteWithRateLimitRetryAsync(request, cancellationToken);
 
         if (!response.IsSuccessful)
             throw new InvalidOperationException($"API call failed: {response.StatusCode} - {response.Content}");
@@ -111,5 +176,31 @@ public sealed class SnipeItClient : ISnipeItClient
         // Snipe-IT responses are deserialized manually here to keep one consistent
         // error-handling path for GET, POST, and PATCH calls.
         return JsonConvert.DeserializeObject<T>(response.Content ?? "");
+    }
+
+    private static bool ShouldFetchNextPage(int total, int collectedRows, int pageRows, int pageLimit)
+    {
+        if (pageRows == 0)
+            return false;
+
+        if (total > 0)
+            return collectedRows < total;
+
+        return pageRows >= pageLimit;
+    }
+
+    private async Task<RestResponse> ExecuteWithRateLimitRetryAsync(
+        RestRequest request,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var response = await _client.ExecuteAsync(request, cancellationToken);
+            if ((int)response.StatusCode != 429 || attempt >= _maxRateLimitRetries)
+                return response;
+
+            var delay = ApiRetryPolicy.GetRetryDelay(response.Headers, _pageDelayMilliseconds, attempt + 1);
+            await Task.Delay(delay, cancellationToken);
+        }
     }
 }

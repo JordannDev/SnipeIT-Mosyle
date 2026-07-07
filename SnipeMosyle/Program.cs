@@ -28,14 +28,22 @@ builder.Services.AddSingleton<IMosyleClient>(sp =>
 {
     var options = sp.GetRequiredService<IOptions<MosyleOptions>>().Value;
     ValidateMosyleOptions(options);
-    return new MosyleClient(options.AccessToken, options.BaseUrl);
+    return new MosyleClient(
+        options.AccessToken,
+        options.BaseUrl,
+        options.PageDelayMilliseconds,
+        options.RateLimitMaxRetries);
 });
 
 builder.Services.AddSingleton<ISnipeItClient>(sp =>
 {
     var options = sp.GetRequiredService<IOptions<SnipeItOptions>>().Value;
     ValidateSnipeItOptions(options);
-    return new SnipeItClient(options.BaseUrl, options.ApiToken);
+    return new SnipeItClient(
+        options.BaseUrl,
+        options.ApiToken,
+        options.PageDelayMilliseconds,
+        options.RateLimitMaxRetries);
 });
 
 builder.Services.AddSingleton<IDeviceSyncService, DeviceSyncService>();

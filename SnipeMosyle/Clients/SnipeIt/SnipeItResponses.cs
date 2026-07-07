@@ -36,6 +36,9 @@ public sealed class CreateModelResponse
 public sealed class ModelListResponse
 {
     [JsonProperty("status")] public string Status { get; set; } = string.Empty;
+    [JsonProperty("total")] public int Total { get; set; }
+    [JsonProperty("offset")] public int Offset { get; set; }
+    [JsonProperty("limit")] public int Limit { get; set; }
     [JsonProperty("rows")] public List<Model> Rows { get; set; } = [];
 }
 
@@ -45,6 +48,9 @@ public sealed class ModelListResponse
 public sealed class AssetListResponse
 {
     [JsonProperty("status")] public string Status { get; set; } = string.Empty;
+    [JsonProperty("total")] public int Total { get; set; }
+    [JsonProperty("offset")] public int Offset { get; set; }
+    [JsonProperty("limit")] public int Limit { get; set; }
     [JsonProperty("rows")] public List<Asset> Rows { get; set; } = [];
 }
 

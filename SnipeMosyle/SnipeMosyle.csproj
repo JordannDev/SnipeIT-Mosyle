@@ -28,4 +28,8 @@
         <PackageReference Include="RestSharp.Serializers.NewtonsoftJson" Version="112.1.1-alpha.0.4"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <InternalsVisibleTo Include="SnipeMosyle.Tests"/>
+    </ItemGroup>
+
 </Project>

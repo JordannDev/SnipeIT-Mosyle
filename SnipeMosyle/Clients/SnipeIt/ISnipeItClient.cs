@@ -18,6 +18,12 @@ public interface ISnipeItClient
     /// <summary>Retrieves a page of Snipe-IT hardware assets.</summary>
     Task<AssetListResponse?> GetAssetsAsync(int page = 1, CancellationToken cancellationToken = default);
 
+    /// <summary>Retrieves all Snipe-IT hardware assets by walking paged list responses.</summary>
+    Task<AssetListResponse?> GetAllAssetsAsync(
+        int limit = 200,
+        int offset = 0,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Retrieves a Snipe-IT user by ID.</summary>
     Task<UserResponse?> GetUserAsync(int userId, CancellationToken cancellationToken = default);
 

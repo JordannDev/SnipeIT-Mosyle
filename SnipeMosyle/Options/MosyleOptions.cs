@@ -26,4 +26,10 @@ public sealed class MosyleOptions
 
     /// <summary>The Mosyle account password used for the login call.</summary>
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>Delay between successful paged Mosyle requests.</summary>
+    public int PageDelayMilliseconds { get; set; } = Clients.ApiRetryPolicy.DefaultPageDelayMilliseconds;
+
+    /// <summary>Maximum number of retries after Mosyle returns HTTP 429.</summary>
+    public int RateLimitMaxRetries { get; set; } = Clients.ApiRetryPolicy.DefaultMaxRateLimitRetries;
 }
